@@ -1,39 +1,59 @@
 package main
 
-//import (
-//	"context"
-//	"fmt"
-//	greet "github.com/chetanborase/grpc-greet-proto/grpc/gen/go/greeting/v1"
-//	"google.golang.org/grpc"
-//	"google.golang.org/grpc/credentials/insecure"
-//	"log"
-//)
-//
-//func main() {
-//	//we dont have ssl certificate defined at and gRPC uses https communication protocol
-//	//so, we need to tell grpc client that connect insecurely without certificate.
-//
-//	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-//
-//	clientConn, err := grpc.Dial(":9000", opt)
-//	if err != nil {
-//		log.Fatalf("server unreachable, %v", err)
-//	}
-//
-//	//don't forget to close otherwise it lead to serious performance issue when multiple client environment
-//	//however, notice we didnt started establishing connection yet. we will do that shortly.
-//	defer clientConn.Close()
-//
-//	greetClient := greet.NewGreetServiceClient(clientConn)
-//
-//	requestData := &greet.GreetRequest{Name: "Chetan"}
-//
-//	//now lets create request object
-//	response, err := greetClient.SayHello(context.Background(), requestData)
-//	if err != nil {
-//		log.Fatalf("Something went wrong, %v", err)
-//	}
-//
-//	//lets print our response
-//	fmt.Printf("Response : %+v\n", response)
-//}
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"sync"
+	"time"
+
+	hrmpb "github.com/chetanborase/gRPC-server-side-streaming/grpc/gen/go/HeartRateMonitor/v1"
+	"google.golang.org/grpc"
+)
+
+func main() {
+	dialer, err := grpc.Dial(":9090", grpc.WithInsecure())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client := hrmpb.NewHeartRateMonitorServiceClient(dialer)
+
+	res, err := client.BeatsPerMinute(context.Background(), &hrmpb.BeatsPerMinuteRequest{Uuid: "mario"})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	//use waitgroup so that dont exit from main function and all goroutine will not terminate
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			resp, err := res.Recv()
+			if err == io.EOF {
+				log.Println("End of stream by server")
+				return
+			}
+
+			if err != nil {
+				log.Fatalln("Receiving", err)
+				return
+			}
+
+			//lets print the response
+			fmt.Println(resp)
+		}
+	}()
+
+	//lets say client want to sample the heart rate for only 10 seconds
+	//and after 10 seconds it tells server to stop streaming.
+
+	timer := time.AfterFunc(time.Duration(5*time.Second), func() { log.Fatal("closing stream from client side"); res.CloseSend(); res.Context().Done() })
+	defer timer.Stop()
+
+	//lets wait here, and goroutines will do there work
+	wg.Wait()
+}
